@@ -853,6 +853,68 @@ def get_callees(identifiers: str) -> str:
 
 
 @mcp.tool()
+def query_sidekick(query: str, new_conversation: bool = False) -> str:
+    """
+    Drive Binary Ninja with natural language via Sidekick (an execution sub-agent).
+
+    Division of labor: YOU (the calling model) do all the analysis and reasoning.
+    Sidekick does NOT analyze — it only translates your instruction into the
+    matching Binary Ninja operation(s) and runs them on the *currently active*
+    binary, returning the query result or a confirmation of the change. Use this to
+    query or patch the database by description instead of calling individual Binary
+    Ninja APIs yourself.
+
+    Good for most Binary Ninja query/patch operations:
+      - Query: find functions/strings/data/types, follow cross-references, run a
+        BNQL query, fetch decompilation or IL for a function.
+      - Patch: rename a function/variable/data symbol, apply or define a type, set
+        a prototype, create/reconstruct a struct, add a comment, fix local analysis
+        (function boundaries, signatures, indirect calls).
+
+    Send a concrete, operational instruction (a command, not an open question), e.g.:
+      - "Rename sub_401000 to parse_header"
+      - "Set the prototype of 0x401000 to int parse(char *buf, int len)"
+      - "Comment 0x401123 with 'bounds check missing'"
+      - "List all cross-references to the string 'admin'"
+      - "Give me the HLIL of main"
+
+    Conversation: by default each call CONTINUES the same Sidekick chat for the
+    active binary, so context carries across calls (you can refer back to "that
+    function" etc.). Set new_conversation=True to discard the running chat and
+    start fresh; the conversation also resets automatically when the active binary
+    changes.
+
+    Constraints:
+      - Not read-only: it may MODIFY the binary database. Changes are atomic and
+        reviewable in Binary Ninja's Transaction Log.
+      - Some operations (e.g. debugger, external MCP tools) need interactive
+        approval in the Binary Ninja UI and may be left pending when driven here.
+      - Executed by an LLM sub-agent: non-deterministic, can be slow, consumes model
+        credits, and requires the Sidekick plugin plus a configured model. A binary
+        must be loaded.
+    """
+    from urllib.parse import quote
+
+    # The shared GET helper builds the query string without URL-encoding, so
+    # percent-encode the free-form question ourselves (the server decodes it via
+    # parse_qsl). timeout=None because the Sidekick agent can be slow.
+    params = {
+        "query": quote(query, safe=""),
+        "new_conversation": "true" if new_conversation else "false",
+    }
+    data = get_json("querySidekick", params, timeout=None)
+    if not data:
+        return "Error: no response"
+    if isinstance(data, dict) and "error" in data:
+        return f"Error: {data['error']}"
+    if isinstance(data, dict) and "response" in data:
+        return str(data["response"])
+    import json as _json
+
+    return _json.dumps(data, indent=2, ensure_ascii=False)
+
+
+@mcp.tool()
 def set_function_prototype(name_or_address: str, prototype: str) -> str:
     """
     Set a function's prototype by name or address.

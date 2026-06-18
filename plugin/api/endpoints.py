@@ -112,6 +112,10 @@ class BinaryNinjaEndpoints:
         """Proxy BinaryOperations.get_callees for endpoint reuse."""
         return self.binary_ops.get_callees(identifiers)
 
+    def query_sidekick(self, query: str, new_conversation: bool = False) -> dict[str, Any]:
+        """Proxy BinaryOperations.query_sidekick for endpoint reuse."""
+        return self.binary_ops.query_sidekick(query, new_conversation=new_conversation)
+
     def get_imports(self, offset: int = 0, limit: int = 100) -> list[dict[str, Any]]:
         """Get list of imported functions"""
         if not self.binary_ops.current_view:

@@ -805,6 +805,33 @@ class MCPRequestHandler(BaseHTTPRequestHandler):
                 else:
                     self._send_json_response(payload)
 
+            elif path == "/querySidekick":
+                query = params.get("query") or params.get("q")
+                if not query:
+                    self._send_json_response(
+                        {
+                            "error": "Missing query parameter",
+                            "help": "Provide ?query=<natural language question>",
+                        },
+                        400,
+                    )
+                    return
+                new_conversation = str(params.get("new_conversation", "")).strip().lower() in (
+                    "1",
+                    "true",
+                    "yes",
+                    "on",
+                )
+                try:
+                    payload = self.binary_ops.query_sidekick(
+                        query, new_conversation=new_conversation
+                    )
+                except Exception as e:
+                    bn.log_error(f"Error handling querySidekick: {e}")
+                    self._send_json_response({"error": str(e)}, 500)
+                else:
+                    self._send_json_response(payload)
+
             elif path == "/decompile":
                 function_name = params.get("name") or params.get("functionName")
                 if not function_name:

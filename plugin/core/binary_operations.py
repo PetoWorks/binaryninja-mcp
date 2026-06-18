@@ -7,14 +7,46 @@ from typing import Any
 import binaryninja as bn
 from binaryninja.enums import StructureVariant, TypeClass
 
+try:
+    import sidekick.api as sk  # type: ignore
+except Exception:  # Sidekick plugin/API not present in this environment
+    sk = None
+
 from ..utils.string_utils import escape_non_ascii
 from .config import BinaryNinjaConfig
+
+# Preamble prepended to every Sidekick request. It pins Sidekick into a narrow
+# "execution sub-agent" role: the calling (frontier) model owns all analysis and
+# reasoning, while Sidekick only translates the instruction into Binary Ninja
+# query or patch operations and runs them — it does not interpret, analyze, or
+# draw conclusions of its own.
+_SIDEKICK_TRANSLATOR_PREAMBLE = (
+    "You are a Binary Ninja execution sub-agent, not an analyst. A more capable "
+    "model performs all reasoning and analysis; your only job is to translate the "
+    "instruction below into the matching Binary Ninja operation(s) and run them — "
+    "either querying the database (functions, variables, types, strings, "
+    "cross-references, BNQL, decompilation/IL) or patching it (rename, set or "
+    "define types, set prototypes, add comments, create structs, fix analysis). "
+    "Do exactly what is asked and nothing more. Do NOT interpret, speculate, draw "
+    "conclusions, summarize intent, or recommend next steps. Return only the "
+    "operation's result, or a concise confirmation of the change including the "
+    "affected addresses/names. If the instruction does not map to a concrete "
+    "Binary Ninja operation, say so briefly instead of guessing.\n\n"
+    "Instruction: "
+)
 
 
 class BinaryOperations:
     def __init__(self, config: BinaryNinjaConfig):
         self.config = config
         self._current_view: bn.BinaryView | None = None
+        # Sidekick runtime bound to the current view (created on view change /
+        # lazily on first query). None when no view or Sidekick is unavailable.
+        self._current_sidekick_runtime: Any = None
+        # Cached Sidekick chat agent for the current view. Reused across
+        # query_sidekick() calls so the conversation persists; reset when the
+        # active view changes or a new conversation is requested.
+        self._current_sidekick_agent: Any = None
         # Multi-binary support
         # Store weak references so closed views are auto-pruned
         self._views_by_id: dict[str, weakref.ReferenceType] = {}
@@ -28,13 +60,25 @@ class BinaryOperations:
     @current_view.setter
     def current_view(self, bv: bn.BinaryView | None):
         self._current_view = bv
+        # The view changed, so any cached Sidekick chat belongs to a different
+        # binary; drop it so the next query starts a conversation for this view.
+        self._current_sidekick_agent = None
         if bv:
+            # Best-effort: bind a Sidekick runtime to this view. Never let a
+            # Sidekick failure (or a missing plugin) break view tracking.
+            if sk is not None:
+                try:
+                    self._current_sidekick_runtime = sk.init_runtime(bv)
+                except Exception as e:
+                    self._current_sidekick_runtime = None
+                    bn.log_warn(f"Failed to initialize Sidekick runtime: {e}")
             bn.log_info(f"Set current binary view: {bv.file.filename}")
             try:
                 self._register_view(bv)
             except Exception:
                 pass
         else:
+            self._current_sidekick_runtime = None
             bn.log_info("Cleared current binary view")
 
     def load_binary(self, filepath: str) -> bn.BinaryView:
@@ -3764,3 +3808,55 @@ class BinaryOperations:
             bn.log_warn(f"Error during codesign: {e}")
 
         return result
+
+    def query_sidekick(self, q: str, *, new_conversation: bool = False) -> dict[str, Any]:
+        """Translate a natural-language instruction into Binary Ninja query/patch
+        operations via the Sidekick agent and return its result.
+
+        Sidekick is used here as an execution sub-agent: the caller (a frontier
+        model) does the analysis, while Sidekick only runs the corresponding
+        Binary Ninja operations. The request is wrapped with a preamble that
+        constrains Sidekick to that role; see ``_SIDEKICK_TRANSLATOR_PREAMBLE``.
+
+        Conversation persistence: the Sidekick chat is cached per active view and
+        reused across calls, so context carries across successive queries. The
+        role preamble is sent only on the first message of a conversation. Pass
+        ``new_conversation=True`` to discard the cached chat and start fresh; the
+        conversation also resets automatically when the active binary changes.
+
+        Returns a dict with the assistant ``response`` plus ``chat_id``,
+        ``thread_id``, and a ``new_conversation`` flag for the call.
+        """
+        if not self._current_view:
+            raise RuntimeError("No binary loaded")
+        if sk is None:
+            raise RuntimeError(
+                "Sidekick API is not available (sidekick plugin not installed)"
+            )
+        runtime = self._current_sidekick_runtime
+        if runtime is None:
+            # load_binary() assigns _current_view directly and bypasses the
+            # property setter, so the runtime may not exist yet. Create it now.
+            runtime = sk.init_runtime(self._current_view)
+            self._current_sidekick_runtime = runtime
+            # A new runtime means any cached agent is bound to a stale session.
+            self._current_sidekick_agent = None
+        session = runtime.session_context
+
+        agent = self._current_sidekick_agent
+        started_new = agent is None or new_conversation
+        if started_new:
+            # Opening a chat caches it so later calls continue the same thread.
+            agent = session.load_sidekick_agent()
+            self._current_sidekick_agent = agent
+
+        # Send the role preamble only when starting a conversation; continuation
+        # turns carry the role implicitly and need just the bare instruction.
+        message = (_SIDEKICK_TRANSLATOR_PREAMBLE + q) if started_new else q
+        answer = agent(message)
+        return {
+            "response": answer,
+            "chat_id": getattr(agent, "chat_id", None),
+            "thread_id": getattr(agent, "thread_id", None),
+            "new_conversation": started_new,
+        }

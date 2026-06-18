@@ -191,6 +191,7 @@ The following table lists the available MCP functions for use:
 | `get_type_info(type_name)`                                           | Resolve a type and return declaration, kind, and members.                                                    |
 | `get_callers(identifiers)`                                           | List callers plus call sites for one or more function identifiers.                                           |
 | `get_callees(identifiers)`                                           | List callees plus call sites for one or more function identifiers.                                           |
+| `query_sidekick(query, new_conversation)`                            | Drive Binary Ninja in natural language via Sidekick (execution sub-agent): translates an instruction into BN query/patch ops (rename, type, comment, BNQL, decompile, …) and runs them. You analyze; Sidekick only queries/patches. Conversation persists per active binary (set `new_conversation` to reset); may modify the DB. |
 | `make_function_at(address, platform)`                                | Create a function at an address. `platform` optional; use `default` to pick the BinaryView/platform default. |
 | `list_platforms()`                                                   | List all available platform names.                                                                           |
 | `list_binaries()`                                                    | List managed/open binaries with ids and active flag.                                                         |

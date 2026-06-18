@@ -1095,4 +1095,27 @@ export function registerTools(server: McpServer, client: BinjaHttpClient): void 
       return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
     }
   );
+
+  server.tool(
+    "query_sidekick",
+    "Drive Binary Ninja with natural language via Sidekick, an execution sub-agent. YOU do the analysis; Sidekick does NOT analyze — it only translates your instruction into the matching Binary Ninja operation(s) and runs them on the active binary, returning the query result or a change confirmation. Use it to QUERY (find functions/strings/data/types, cross-references, BNQL, decompilation/IL) or PATCH (rename, apply/define types, set prototypes, create structs, add comments, fix analysis) by description. Send concrete operational instructions, e.g. 'Rename sub_401000 to parse_header'. Conversation: by default each call continues the same Sidekick chat for the active binary so context carries across calls; set new_conversation=true to start fresh (also resets when the active binary changes). Constraints: not read-only (may modify the DB, reviewable in the Transaction Log); some ops need interactive approval in the Binary Ninja UI; non-deterministic LLM sub-agent, can be slow, requires the Sidekick plugin and a configured model; a binary must be loaded.",
+    {
+      query: z.string().describe("Concrete, operational Binary Ninja instruction to translate and run (a command, not an open-ended analysis question)"),
+      new_conversation: z.boolean().default(false).describe("Start a fresh Sidekick conversation instead of continuing the persistent one for the active binary"),
+    },
+    async ({ query, new_conversation = false }) => {
+      // Sidekick is an LLM agent and can be slow; disable the client timeout (0).
+      const data = await client.getJson<{ error?: string; response?: unknown }>("querySidekick", { query, new_conversation: new_conversation ? "true" : "false" }, 0);
+      if (!data) {
+        return { content: [{ type: "text", text: "Error: no response" }] };
+      }
+      if ("error" in data) {
+        return { content: [{ type: "text", text: `Error: ${String((data as { error: string }).error)}` }] };
+      }
+      if ("response" in data) {
+        return { content: [{ type: "text", text: String((data as { response: unknown }).response) }] };
+      }
+      return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
+    }
+  );
 }
