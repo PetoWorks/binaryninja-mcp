@@ -603,7 +603,7 @@ try:
         def __init__(self):
             super().__init__()
             ui.UIContext.registerNotification(self)
-        
+
         def _get_active_bv(self):
             try:
                 ctx = ui.UIContext.activeContext()
@@ -664,6 +664,11 @@ try:
                         plugin.server.binary_ops.unregister_by_filename(fn)
             except Exception:
                 pass
+            # Must return True to allow the file/tab to close. OnBeforeCloseFile
+            # is a bool callback (True = allow close, False = cancel). Returning
+            # None (the implicit default) is treated as False by the UI bindings,
+            # which blocks tabs from closing and prevents the app from quitting.
+            return True
 
         def OnAfterCloseFile(self, *args):  # type: ignore[override]
             try:
